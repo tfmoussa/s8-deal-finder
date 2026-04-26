@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import {
   Search,
   Map,
@@ -9,11 +9,12 @@ import {
   Calculator,
   Settings,
   ChevronDown,
-  BarChart3,
   Home,
+  LogOut,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { createClient } from '@/lib/supabase/client';
 
 interface NavItem {
   label: string;
@@ -46,7 +47,21 @@ const BOTTOM_ITEMS: NavItem[] = [
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
   const [expanded, setExpanded] = useState<string[]>(['Deal Finder']);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const supabase = createClient();
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      setUserEmail(user?.email ?? null);
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    router.replace('/login');
+  };
 
   const toggleGroup = (label: string) => {
     setExpanded(prev =>
@@ -144,6 +159,20 @@ export default function Sidebar() {
             {item.label}
           </Link>
         ))}
+
+        {/* User / sign out */}
+        {userEmail && (
+          <div className="mt-2 pt-2 border-t border-slate-700">
+            <p className="px-3 text-[10px] text-slate-500 truncate mb-1">{userEmail}</p>
+            <button
+              onClick={handleSignOut}
+              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-sm text-slate-400 hover:bg-[var(--sidebar-accent)] hover:text-white transition-colors"
+            >
+              <LogOut className="w-4 h-4" />
+              Sign out
+            </button>
+          </div>
+        )}
       </div>
     </aside>
   );
