@@ -3,11 +3,6 @@ import { NextRequest, NextResponse } from 'next/server';
 const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY ?? '';
 const RAPIDAPI_HOST = process.env.RAPIDAPI_HOST ?? 'real-time-real-estate-data.p.rapidapi.com';
 
-/**
- * GET /api/properties/[id]
- * Calls the /property-details endpoint from OpenWeb Ninja.
- * The [id] param is the property_id returned from /search.
- */
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -19,7 +14,8 @@ export async function GET(
   }
 
   try {
-    const url = `https://${RAPIDAPI_HOST}/property-details?property_id=${id}`;
+    // Confirmed param name: zpid
+    const url = `https://${RAPIDAPI_HOST}/property-details?zpid=${id}`;
 
     const res = await fetch(url, {
       headers: {
@@ -29,56 +25,66 @@ export async function GET(
       next: { revalidate: 3600 },
     });
 
-    if (!res.ok) {
-      const text = await res.text();
-      console.error('RapidAPI /property-details error:', res.status, text);
-      return NextResponse.json({ error: `Upstream ${res.status}` }, { status: res.status });
+    const raw = await res.json();
+
+    if (raw?.status === 'ERROR') {
+      return NextResponse.json({ error: raw.error?.message ?? 'API error' }, { status: 400 });
     }
 
-    const raw = await res.json();
     const p: Record<string, unknown> = raw?.data ?? raw;
+    const rf = (p.resoFacts ?? {}) as Record<string, unknown>;
 
-    const address = (
-      p.full_address ??
-      [p.street, p.city, p.state, p.zip_code].filter(Boolean).join(', ')
-    ) as string;
+    // address field is an object: { streetAddress, city, state, zipcode }
+    const addrObj = (typeof p.address === 'object' && p.address !== null)
+      ? p.address as Record<string, string>
+      : null;
 
-    // Photos: the API returns an array of photo URLs or objects
+    const address = addrObj
+      ? [addrObj.streetAddress, addrObj.city, addrObj.state, addrObj.zipcode].filter(Boolean).join(', ')
+      : String(p.address ?? '');
+
+    // Photos: array of { mixedSources: { jpeg: [{ url, width }] } }
     const photos = Array.isArray(p.photos)
-      ? (p.photos as Array<string | Record<string, unknown>>).map(ph =>
-          typeof ph === 'string' ? ph : (ph?.href ?? ph?.url ?? ph?.src ?? '') as string
-        ).filter(Boolean)
+      ? (p.photos as Array<Record<string, unknown>>)
+          .map(ph => {
+            const mixed = ph?.mixedSources as Record<string, Array<{ url: string }>> | undefined;
+            return mixed?.jpeg?.[0]?.url ?? (ph?.url as string) ?? null;
+          })
+          .filter(Boolean) as string[]
       : [];
 
+    // Monthly property tax from resoFacts.taxAnnualAmount
+    const annualTax = Number(rf.taxAnnualAmount ?? 0);
+    const propTaxesMonthly = annualTax > 0 ? annualTax / 12 : undefined;
+
     const detail = {
-      id: p.property_id ?? id,
+      id: p.zpid ?? id,
       zpid: String(p.zpid ?? id),
       address,
-      city: (p.city ?? '') as string,
-      state: (p.state ?? '') as string,
-      zipCode: String(p.zip_code ?? p.zipcode ?? ''),
-      listPrice: Number(p.list_price ?? p.price ?? 0),
-      bedrooms: Number(p.beds ?? p.bedrooms ?? 0),
-      bathrooms: Number(p.baths ?? p.bathrooms ?? 0),
-      sqft: Number(p.sqft ?? p.living_area ?? 0) || undefined,
-      yearBuilt: Number(p.year_built ?? p.yearBuilt ?? 0) || undefined,
-      primaryImageUrl: (p.primary_photo ?? photos[0] ?? '') as string,
+      city: (addrObj?.city ?? p.city ?? '') as string,
+      state: (addrObj?.state ?? p.state ?? '') as string,
+      zipCode: String(addrObj?.zipcode ?? p.zipcode ?? ''),
+      listPrice: Number(p.price ?? 0),
+      bedrooms: Number(p.bedrooms ?? 0),
+      bathrooms: Number(p.bathrooms ?? 0),
+      sqft: Number(p.livingArea ?? 0) || undefined,
+      yearBuilt: Number(rf.yearBuilt ?? p.yearBuilt ?? 0) || undefined,
+      primaryImageUrl: photos[0] ?? '',
       imageUrls: photos,
       status: 'FOR_SALE' as const,
-      latitude: Number(p.latitude ?? p.lat ?? 0) || undefined,
-      longitude: Number(p.longitude ?? p.lng ?? p.lon ?? 0) || undefined,
-      countyName: (p.county ?? '') as string,
-      propTaxes: Number(p.annual_tax ?? 0)
-        ? Number(p.annual_tax) / 12
-        : undefined,
-      isSellerFinanceAvailable: Boolean(p.seller_financed ?? false),
-      zillowUrl: (p.permalink ?? p.detail_url ?? '') as string,
-      daysOnMarket: Number(p.days_on_market ?? 0) || undefined,
+      latitude: Number(p.latitude ?? 0) || undefined,
+      longitude: Number(p.longitude ?? 0) || undefined,
+      countyName: (addrObj?.subdivision ?? '') as string,
+      propTaxes: propTaxesMonthly,
+      fmr: Number(p.rentZestimate ?? 0) || undefined,
+      isSellerFinanceAvailable: false,
+      zillowUrl: (p.url ?? p.detailUrl ?? `https://www.zillow.com/homes/${id}_zpid/`) as string,
+      daysOnMarket: Number(p.daysOnZillow ?? 0) || undefined,
     };
 
     return NextResponse.json(detail);
   } catch (err) {
-    console.error('Property detail API error:', err);
+    console.error('Property detail error:', err);
     return NextResponse.json({ error: 'Internal error' }, { status: 500 });
   }
 }

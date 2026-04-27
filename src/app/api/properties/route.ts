@@ -3,14 +3,6 @@ import { NextRequest, NextResponse } from 'next/server';
 const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY ?? '';
 const RAPIDAPI_HOST = process.env.RAPIDAPI_HOST ?? 'real-time-real-estate-data.p.rapidapi.com';
 
-/**
- * GET /api/properties
- * Query params: state, county, city, priceMin, priceMax, beds, page, limit
- *
- * Uses RapidAPI "Real-Time Real-Estate Data" by OpenWeb Ninja.
- * Endpoint: GET /search
- * Docs: https://rapidapi.com/openwebninaapi/api/real-time-real-estate-data
- */
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl;
 
@@ -34,12 +26,12 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    // Build location string — most specific first
+    // Most specific location wins — city, county, or state
     const locationParts = [city, county, state].filter(Boolean).join(', ');
 
     const params = new URLSearchParams({
       location: locationParts,
-      listing_type: 'for_sale',
+      listing_type: 'BY_AGENT',   // confirmed: BY_AGENT | BY_OWNER_OTHER
       page: String(page),
       sort_by: 'price_low_to_high',
     });
@@ -48,8 +40,7 @@ export async function GET(req: NextRequest) {
     if (priceMax) params.set('price_max', priceMax);
     if (beds) params.set('bedrooms_min', beds);
 
-    // Correct endpoint: /search (not /search-properties)
-    const url = `https://${RAPIDAPI_HOST}/search?${params.toString()}`;
+    const url = `https://${RAPIDAPI_HOST}/search?${params}`;
 
     const res = await fetch(url, {
       headers: {
@@ -59,25 +50,24 @@ export async function GET(req: NextRequest) {
       next: { revalidate: 3600 },
     });
 
-    if (!res.ok) {
-      const text = await res.text();
-      console.error('RapidAPI /search error:', res.status, text);
-      return NextResponse.json(
-        { error: `Upstream error ${res.status}`, properties: [], totalCount: 0 },
-        { status: 200 }
-      );
-    }
-
     const raw = await res.json();
 
-    // OpenWeb Ninja wraps results in `data` array
-    const listings = (raw?.data ?? raw?.properties ?? raw?.results ?? []) as Record<string, unknown>[];
+    if (raw?.status === 'ERROR') {
+      console.error('RapidAPI error:', raw.error);
+      return NextResponse.json({
+        error: raw.error?.message ?? 'API error',
+        properties: [],
+        totalCount: 0,
+      });
+    }
 
+    // data is a flat array of property objects
+    const listings = (raw?.data ?? []) as Record<string, unknown>[];
     const properties = listings.map(normalizeProperty);
 
     return NextResponse.json({
       properties,
-      totalCount: raw?.total_count ?? raw?.totalCount ?? listings.length,
+      totalCount: raw?.total_count ?? raw?.totalResultCount ?? listings.length,
       page,
     });
   } catch (err) {
@@ -89,32 +79,30 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// Normalize OpenWeb Ninja property → our PropertyListItem shape
-// Field names from their documented response schema
 function normalizeProperty(p: Record<string, unknown>) {
-  const address = [
-    p.full_address ?? [p.street, p.city, p.state, p.zip_code].filter(Boolean).join(', ')
-  ][0] as string ?? '';
+  // address is a flat string like "123 Main St, Houston, TX 77065"
+  const address = (p.address ?? [p.streetAddress, p.city, p.state, p.zipcode].filter(Boolean).join(', ')) as string;
 
   return {
-    id: p.property_id ?? p.zpid ?? p.id,
-    zpid: String(p.zpid ?? p.property_id ?? ''),
+    id: p.zpid ?? p.id,
+    zpid: String(p.zpid ?? ''),
     address,
     city: (p.city ?? '') as string,
     state: (p.state ?? '') as string,
-    zipCode: String(p.zip_code ?? p.zipcode ?? ''),
-    listPrice: Number(p.list_price ?? p.price ?? 0),
-    bedrooms: Number(p.beds ?? p.bedrooms ?? 0),
-    bathrooms: Number(p.baths ?? p.bathrooms ?? 0),
-    sqft: Number(p.sqft ?? p.living_area ?? 0) || undefined,
-    yearBuilt: Number(p.year_built ?? p.yearBuilt ?? 0) || undefined,
-    primaryImageUrl: (p.primary_photo ?? p.imgSrc ?? '') as string,
-    imageUrls: Array.isArray(p.photos) ? (p.photos as string[]) : undefined,
+    zipCode: String(p.zipcode ?? ''),
+    listPrice: Number(p.price ?? p.unformattedPrice ?? 0),
+    bedrooms: Number(p.bedrooms ?? p.beds ?? 0),
+    bathrooms: Number(p.bathrooms ?? p.baths ?? 0),
+    sqft: Number(p.livingArea ?? p.area ?? 0) || undefined,
+    yearBuilt: Number(p.yearBuilt ?? 0) || undefined,
+    primaryImageUrl: (p.imgSrc ?? '') as string,
     status: 'FOR_SALE' as const,
-    latitude: Number(p.latitude ?? p.lat ?? 0) || undefined,
-    longitude: Number(p.longitude ?? p.lng ?? p.lon ?? 0) || undefined,
-    daysOnMarket: Number(p.days_on_market ?? p.daysOnMarket ?? 0) || undefined,
-    zillowUrl: (p.permalink ?? p.detail_url ?? p.detailUrl ?? '') as string,
-    isSellerFinanceAvailable: Boolean(p.seller_financed ?? false),
+    latitude: Number(p.latitude ?? (p.latLong as Record<string, unknown>)?.latitude ?? 0) || undefined,
+    longitude: Number(p.longitude ?? (p.latLong as Record<string, unknown>)?.longitude ?? 0) || undefined,
+    daysOnMarket: Number(p.daysOnZillow ?? p.daysOnMarket ?? 0) || undefined,
+    zillowUrl: (p.detailUrl ?? '') as string,
+    // rentZestimate = Zillow's free rent estimate — use as FMR proxy
+    fmr: Number(p.rentZestimate ?? 0) || undefined,
+    isSellerFinanceAvailable: false,
   };
 }
