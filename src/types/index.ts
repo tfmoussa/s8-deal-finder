@@ -73,7 +73,7 @@ export interface FinancialAssumptions {
 }
 
 export const DEFAULT_ASSUMPTIONS: FinancialAssumptions = {
-  propMgmtPct: 8,
+  propMgmtPct: 10,        // Section 8 industry standard
   insuranceMonthly: 100,
   utilitiesMonthly: 0,
   vacancyReservePct: 5,
@@ -138,6 +138,7 @@ export interface SearchFilters {
   priceMax?: number;
   cashflowMin?: number;
   bedroomsMin?: number;
+  bedroomsMax?: number;
   status?: PropertyStatus | 'ALL';
   sellerFinancing?: boolean;
   showFavoritesOnly?: boolean;

@@ -15,10 +15,12 @@ interface SearchFiltersProps {
 
 const BED_OPTIONS = [
   { value: '', label: 'Any' },
-  { value: '1', label: '1+' },
-  { value: '2', label: '2+' },
-  { value: '3', label: '3+' },
-  { value: '4', label: '4+' },
+  { value: '0', label: 'Studio' },
+  { value: '1', label: '1' },
+  { value: '2', label: '2' },
+  { value: '3', label: '3' },
+  { value: '4', label: '4' },
+  { value: '5', label: '5+' },
 ];
 
 export default function SearchFilters({ onSearch, isLoading }: SearchFiltersProps) {
@@ -54,6 +56,9 @@ export default function SearchFilters({ onSearch, isLoading }: SearchFiltersProp
   }, [state]);
 
   const handleSearch = () => {
+    // beds === '' means Any; '0'–'4' = exact count; '5' = "5+" open-ended
+    const bedsNum = beds !== '' ? Number(beds) : undefined;
+    const bedsMax = bedsNum !== undefined && bedsNum < 5 ? bedsNum : undefined;
     onSearch({
       state: state || undefined,
       county: county || undefined,
@@ -61,7 +66,8 @@ export default function SearchFilters({ onSearch, isLoading }: SearchFiltersProp
       priceMin: priceMin ? Number(priceMin) : undefined,
       priceMax: priceMax ? Number(priceMax) : undefined,
       cashflowMin: cashflowMin ? Number(cashflowMin) : undefined,
-      bedroomsMin: beds ? Number(beds) : undefined,
+      bedroomsMin: bedsNum,
+      bedroomsMax: bedsMax,
       sellerFinancing: sellerFinancing || undefined,
       showFavoritesOnly: favoritesOnly || undefined,
     });

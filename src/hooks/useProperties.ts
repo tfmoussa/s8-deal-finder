@@ -61,7 +61,8 @@ export function useProperties(): UsePropertiesResult {
       if (filters.city) params.set('city', filters.city);
       if (filters.priceMin) params.set('priceMin', String(filters.priceMin));
       if (filters.priceMax) params.set('priceMax', String(filters.priceMax));
-      if (filters.bedroomsMin) params.set('beds', String(filters.bedroomsMin));
+      if (filters.bedroomsMin !== undefined) params.set('beds', String(filters.bedroomsMin));
+      if (filters.bedroomsMax !== undefined) params.set('bedsMax', String(filters.bedroomsMax));
       params.set('page', '1');
       params.set('limit', '40');
 
@@ -116,7 +117,8 @@ export function useProperties(): UsePropertiesResult {
       if (filters.city) params.set('city', filters.city);
       if (filters.priceMin) params.set('priceMin', String(filters.priceMin));
       if (filters.priceMax) params.set('priceMax', String(filters.priceMax));
-      if (filters.bedroomsMin) params.set('beds', String(filters.bedroomsMin));
+      if (filters.bedroomsMin !== undefined) params.set('beds', String(filters.bedroomsMin));
+      if (filters.bedroomsMax !== undefined) params.set('bedsMax', String(filters.bedroomsMax));
       params.set('page', String(nextPage));
       params.set('limit', '40');
 
