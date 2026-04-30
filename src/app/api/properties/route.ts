@@ -35,8 +35,8 @@ function hudFmrForBeds(row: Record<string, number>, beds: number): number {
   return Number(row[`fmr_${b}`] ?? row['fmr_2'] ?? 0);
 }
 
-// Pages to fetch in parallel per request (41 results/page × 5 pages = ~200 results)
-const PAGES_PER_FETCH = 5;
+// Pages to fetch in parallel per request (41 results/page × 15 pages = ~615 results)
+const PAGES_PER_FETCH = 15;
 
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl;

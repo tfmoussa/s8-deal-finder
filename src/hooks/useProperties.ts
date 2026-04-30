@@ -14,13 +14,32 @@ interface UsePropertiesResult {
   hasMore: boolean;
 }
 
+function buildParams(filters: SearchFilters, startPage: number): URLSearchParams {
+  const params = new URLSearchParams();
+  if (filters.state)                          params.set('state',       filters.state);
+  if (filters.county)                         params.set('county',      filters.county);
+  if (filters.city)                           params.set('city',        filters.city);
+  if (filters.priceMin)                       params.set('priceMin',    String(filters.priceMin));
+  if (filters.priceMax)                       params.set('priceMax',    String(filters.priceMax));
+  if (filters.cashflowMin)                    params.set('cashflowMin', String(filters.cashflowMin));
+  if (filters.bedroomsMin !== undefined)      params.set('beds',        String(filters.bedroomsMin));
+  if (filters.bedroomsMax !== undefined)      params.set('bedsMax',     String(filters.bedroomsMax));
+  params.set('page', String(startPage));
+  return params;
+}
+
 export function useProperties(): UsePropertiesResult {
-  const [properties, setProperties] = useState<PropertyListItem[]>([]);
-  const [totalCount, setTotalCount] = useState(0);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [page, setPage] = useState(1);
-  const currentFilters = useRef<SearchFilters>({});
+  const [properties, setProperties]   = useState<PropertyListItem[]>([]);
+  const [totalCount, setTotalCount]   = useState(0);
+  const [isLoading, setIsLoading]     = useState(false);
+  const [error, setError]             = useState<string | null>(null);
+
+  // Track the next batch start page (advances by pagesPerFetch each load)
+  const nextStartPage    = useRef(1);
+  const pagesPerFetch    = useRef(15);       // kept in sync with server constant
+  const currentFilters   = useRef<SearchFilters>({});
+  const seenZpids        = useRef(new Set<string>());
+
   const supabase = createClient();
 
   const fetchUserMeta = useCallback(
@@ -35,7 +54,7 @@ export function useProperties(): UsePropertiesResult {
         supabase.from('suppressed_properties').select('property_id, suppressed_until').eq('user_id', user.id).in('property_id', propertyIds),
       ]);
 
-      const favSet = new Set((favRes.data ?? []).map(r => r.property_id));
+      const favSet  = new Set((favRes.data  ?? []).map(r => r.property_id));
       const noteSet = new Set((noteRes.data ?? []).map(r => r.property_id));
       const suppMap = new Map(
         (suppRes.data ?? [])
@@ -48,26 +67,37 @@ export function useProperties(): UsePropertiesResult {
     [supabase]
   );
 
+  const enrich = useCallback(
+    async (rawProps: PropertyListItem[]) => {
+      const ids = rawProps.map(p => Number(p.id)).filter(Boolean);
+      const { favSet, noteSet, suppMap } = await fetchUserMeta(ids) as {
+        favSet?:  Set<number>;
+        noteSet?: Set<number>;
+        suppMap?: Map<number, string>;
+      };
+
+      return rawProps
+        .map(p => ({
+          ...p,
+          isFavorite:      favSet?.has(Number(p.id))  ?? false,
+          hasNotes:        noteSet?.has(Number(p.id)) ?? false,
+          isSuppressed:    suppMap?.has(Number(p.id)) ?? false,
+          suppressedUntil: suppMap?.get(Number(p.id)) ?? null,
+        }))
+        .filter(p => !p.isSuppressed);
+    },
+    [fetchUserMeta]
+  );
+
   const search = useCallback(async (filters: SearchFilters) => {
     currentFilters.current = filters;
-    setPage(1);
+    seenZpids.current      = new Set();
+    nextStartPage.current  = 1;
     setError(null);
     setIsLoading(true);
 
     try {
-      const params = new URLSearchParams();
-      if (filters.state) params.set('state', filters.state);
-      if (filters.county) params.set('county', filters.county);
-      if (filters.city) params.set('city', filters.city);
-      if (filters.priceMin) params.set('priceMin', String(filters.priceMin));
-      if (filters.priceMax) params.set('priceMax', String(filters.priceMax));
-      if (filters.cashflowMin) params.set('cashflowMin', String(filters.cashflowMin));
-      if (filters.bedroomsMin !== undefined) params.set('beds', String(filters.bedroomsMin));
-      if (filters.bedroomsMax !== undefined) params.set('bedsMax', String(filters.bedroomsMax));
-      params.set('page', '1');
-      params.set('limit', '40');
-
-      const res = await fetch(`/api/properties?${params.toString()}`);
+      const res  = await fetch(`/api/properties?${buildParams(filters, 1)}`);
       const json = await res.json();
 
       if (json.error && !json.properties) {
@@ -77,25 +107,16 @@ export function useProperties(): UsePropertiesResult {
         return;
       }
 
+      // Advance the next start page by however many pages this batch covered
+      const ppf = json.pagesPerFetch ?? 15;
+      pagesPerFetch.current = ppf;
+      nextStartPage.current = 1 + ppf;
+
       const rawProps: PropertyListItem[] = json.properties ?? [];
-      const ids = rawProps.map(p => Number(p.id)).filter(Boolean);
-      const { favSet, noteSet, suppMap } = await fetchUserMeta(ids) as {
-        favSet?: Set<number>;
-        noteSet?: Set<number>;
-        suppMap?: Map<number, string>;
-      };
+      // Track zpids so Load More can skip duplicates
+      rawProps.forEach(p => seenZpids.current.add(String(p.zpid ?? p.id)));
 
-      const enriched = rawProps.map(p => ({
-        ...p,
-        isFavorite: favSet?.has(Number(p.id)) ?? false,
-        hasNotes: noteSet?.has(Number(p.id)) ?? false,
-        isSuppressed: suppMap?.has(Number(p.id)) ?? false,
-        suppressedUntil: suppMap?.get(Number(p.id)) ?? null,
-      }));
-
-      // Filter out suppressed properties
-      const visible = enriched.filter(p => !p.isSuppressed);
-
+      const visible = await enrich(rawProps);
       setProperties(visible);
       setTotalCount(json.totalCount || visible.length);
     } catch (err) {
@@ -103,52 +124,42 @@ export function useProperties(): UsePropertiesResult {
     } finally {
       setIsLoading(false);
     }
-  }, [fetchUserMeta]);
+  }, [enrich]);
 
   const loadMore = useCallback(async () => {
-    const nextPage = page + 1;
-    setPage(nextPage);
+    const startPage = nextStartPage.current;
     setIsLoading(true);
 
     try {
       const filters = currentFilters.current;
-      const params = new URLSearchParams();
-      if (filters.state) params.set('state', filters.state);
-      if (filters.county) params.set('county', filters.county);
-      if (filters.city) params.set('city', filters.city);
-      if (filters.priceMin) params.set('priceMin', String(filters.priceMin));
-      if (filters.priceMax) params.set('priceMax', String(filters.priceMax));
-      if (filters.cashflowMin) params.set('cashflowMin', String(filters.cashflowMin));
-      if (filters.bedroomsMin !== undefined) params.set('beds', String(filters.bedroomsMin));
-      if (filters.bedroomsMax !== undefined) params.set('bedsMax', String(filters.bedroomsMax));
-      params.set('page', String(nextPage));
-      params.set('limit', '40');
-
-      const res = await fetch(`/api/properties?${params.toString()}`);
+      const res  = await fetch(`/api/properties?${buildParams(filters, startPage)}`);
       const json = await res.json();
+
+      // Advance cursor
+      const ppf = json.pagesPerFetch ?? pagesPerFetch.current;
+      nextStartPage.current = startPage + ppf;
+
       const rawProps: PropertyListItem[] = json.properties ?? [];
-      const ids = rawProps.map(p => Number(p.id)).filter(Boolean);
-      const { favSet, noteSet, suppMap } = await fetchUserMeta(ids) as {
-        favSet?: Set<number>;
-        noteSet?: Set<number>;
-        suppMap?: Map<number, string>;
-      };
 
-      const enriched = rawProps.map(p => ({
-        ...p,
-        isFavorite: favSet?.has(Number(p.id)) ?? false,
-        hasNotes: noteSet?.has(Number(p.id)) ?? false,
-        isSuppressed: suppMap?.has(Number(p.id)) ?? false,
-        suppressedUntil: suppMap?.get(Number(p.id)) ?? null,
-      })).filter(p => !p.isSuppressed);
+      // Deduplicate against already-shown results
+      const fresh = rawProps.filter(p => {
+        const key = String(p.zpid ?? p.id);
+        if (seenZpids.current.has(key)) return false;
+        seenZpids.current.add(key);
+        return true;
+      });
 
+      const enriched = await enrich(fresh);
       setProperties(prev => [...prev, ...enriched]);
+
+      // Update total if API now has a better number
+      if (json.totalCount) setTotalCount(json.totalCount);
     } catch (err) {
       console.error('Load more error:', err);
     } finally {
       setIsLoading(false);
     }
-  }, [page, fetchUserMeta]);
+  }, [enrich]);
 
   const hasMore = properties.length < totalCount;
 
