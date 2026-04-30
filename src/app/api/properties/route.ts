@@ -179,9 +179,11 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // Use API-reported total when available; fall back to actual result count
+    const reportedTotal = agentTotal + ownerTotal;
     return NextResponse.json({
       properties,
-      totalCount: agentTotal + ownerTotal,
+      totalCount: reportedTotal > 0 ? reportedTotal : properties.length,
       page: startPage,
       pagesPerFetch: PAGES_PER_FETCH,
     });

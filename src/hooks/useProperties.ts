@@ -97,7 +97,7 @@ export function useProperties(): UsePropertiesResult {
       const visible = enriched.filter(p => !p.isSuppressed);
 
       setProperties(visible);
-      setTotalCount(json.totalCount ?? visible.length);
+      setTotalCount(json.totalCount || visible.length);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
