@@ -41,14 +41,15 @@ const PAGES_PER_FETCH = 5;
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl;
 
-  const state    = searchParams.get('state') ?? '';
-  const county   = searchParams.get('county') ?? '';
-  const city     = searchParams.get('city') ?? '';
-  const priceMin = searchParams.get('priceMin') ?? '';
-  const priceMax = searchParams.get('priceMax') ?? '';
-  const beds     = searchParams.get('beds') ?? '';           // exact count now
-  const bedsMax  = searchParams.get('bedsMax') ?? '';        // for "5+" = bedsMax omitted
-  const startPage = parseInt(searchParams.get('page') ?? '1'); // batch offset (1, 2, 3…)
+  const state        = searchParams.get('state') ?? '';
+  const county       = searchParams.get('county') ?? '';
+  const city         = searchParams.get('city') ?? '';
+  const priceMin     = searchParams.get('priceMin') ?? '';
+  const priceMax     = searchParams.get('priceMax') ?? '';
+  const beds         = searchParams.get('beds') ?? '';           // exact count now
+  const bedsMax      = searchParams.get('bedsMax') ?? '';        // for "5+" = bedsMax omitted
+  const cashflowMin  = searchParams.get('cashflowMin') ?? '';
+  const startPage    = parseInt(searchParams.get('page') ?? '1'); // batch offset (1, 2, 3…)
 
   if (!state) {
     return NextResponse.json({ error: 'state is required' }, { status: 400 });
@@ -126,7 +127,35 @@ export async function GET(req: NextRequest) {
       return true;
     });
 
-    const properties = combined.map(normalizeProperty);
+    let properties = combined.map(normalizeProperty);
+
+    // ── Client-side price filter (API params may be silently ignored) ─────────
+    const numPriceMin = priceMin ? Number(priceMin) : 0;
+    const numPriceMax = priceMax ? Number(priceMax) : Infinity;
+    if (numPriceMin > 0 || numPriceMax < Infinity) {
+      properties = properties.filter(p =>
+        p.listPrice >= numPriceMin && p.listPrice <= numPriceMax
+      );
+    }
+
+    // ── Cashflow min filter (estimated using default assumptions) ─────────────
+    if (cashflowMin) {
+      const minCF = Number(cashflowMin);
+      // Simple mortgage: 80% LTV, 7% rate, 30yr (default assumptions)
+      const estimateCashflow = (price: number, fmr?: number) => {
+        if (!fmr) return null; // can't compute without FMR
+        const principal = price * 0.80;
+        const monthlyRate = 0.07 / 12;
+        const n = 360;
+        const mortgage = principal * (monthlyRate * Math.pow(1 + monthlyRate, n)) / (Math.pow(1 + monthlyRate, n) - 1);
+        const expenses = fmr * 0.10 + 100 + fmr * 0.05 + fmr * 0.05; // mgmt + insurance + vacancy + maint
+        return fmr - mortgage - expenses;
+      };
+      properties = properties.filter(p => {
+        const cf = estimateCashflow(p.listPrice, p.fmr);
+        return cf === null || cf >= minCF; // keep if no FMR (can't filter) or meets threshold
+      });
+    }
 
     // ── HUD FMR fallback for properties missing rentZestimate ────────────────
     const missingFmr = properties.some(p => !p.fmr);
