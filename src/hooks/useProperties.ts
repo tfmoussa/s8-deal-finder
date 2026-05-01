@@ -33,6 +33,7 @@ export function useProperties(): UsePropertiesResult {
   const [totalCount, setTotalCount]   = useState(0);
   const [isLoading, setIsLoading]     = useState(false);
   const [error, setError]             = useState<string | null>(null);
+  const [hasMore, setHasMore]         = useState(false);
 
   // Track the next batch start page (advances by pagesPerFetch each load)
   const nextStartPage    = useRef(1);
@@ -119,6 +120,7 @@ export function useProperties(): UsePropertiesResult {
       const visible = await enrich(rawProps);
       setProperties(visible);
       setTotalCount(json.totalCount || visible.length);
+      setHasMore(json.hasMore ?? false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
@@ -152,16 +154,15 @@ export function useProperties(): UsePropertiesResult {
       const enriched = await enrich(fresh);
       setProperties(prev => [...prev, ...enriched]);
 
-      // Update total if API now has a better number
+      // Update total and hasMore from this batch
       if (json.totalCount) setTotalCount(json.totalCount);
+      setHasMore(json.hasMore ?? false);
     } catch (err) {
       console.error('Load more error:', err);
     } finally {
       setIsLoading(false);
     }
   }, [enrich]);
-
-  const hasMore = properties.length < totalCount;
 
   return { properties, totalCount, isLoading, error, search, loadMore, hasMore };
 }

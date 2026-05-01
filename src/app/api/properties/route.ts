@@ -117,6 +117,11 @@ export async function GET(req: NextRequest) {
     const ownerListings  = ownerResults.flatMap(r => r.listings);
     const agentTotal     = agentResults[0]?.total ?? 0;
     const ownerTotal     = ownerResults[0]?.total ?? 0;
+    // hasMore: true if the last page of either type returned results
+    const agentLastPage  = agentResults[agentResults.length - 1];
+    const ownerLastPage  = ownerResults[ownerResults.length - 1];
+    const apiHasMore     = (agentLastPage?.listings.length ?? 0) > 0 ||
+                           (ownerLastPage?.listings.length ?? 0) > 0;
 
     // Deduplicate by zpid
     const seen = new Set<string>();
@@ -184,6 +189,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       properties,
       totalCount: reportedTotal > 0 ? reportedTotal : properties.length,
+      hasMore: apiHasMore,
       page: startPage,
       pagesPerFetch: PAGES_PER_FETCH,
     });
